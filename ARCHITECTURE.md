@@ -122,6 +122,7 @@ The two implementations now share the same configuration schema and the same dec
 | Feature | Live IB bot | Backtest engine |
 |---|---|---|
 | Configurable entry-cross mode (`same_bar` / `prev_close`) | **Yes** (`entry_cross_mode`) | Yes (`ENTRY_CROSS_MODE`) |
+| 30-min indicator timing (last-closed bar only) | **Yes** -- via `data_manager.get_last_closed_bar_index` | Yes -- post-`shift(1)` in `_compute_30min`, see [`backtest/README.md`](backtest/README.md) §8 |
 | Single-leg entry / exit | Yes (when `enable_trim_and_trail=False`) | Yes (when `ENABLE_TRIM_AND_TRAIL=False`) |
 | Multi-leg trim-and-trail (L1/L2/L3, shared `parent_id`) | **Yes** | Yes |
 | Daily-close EMA exit (per-leg `ema_exit_period`) | **Yes** | Yes |
@@ -777,6 +778,7 @@ This approach trades complexity for safety: a partial fill or a manual intervent
 
 Latest sprint (most recent first). For backtest-side changes, see [`backtest/README.md`](backtest/README.md) §8.
 
+- **Backtest 30-min indicator look-ahead fixed (parity restored).** The live bot has always read indicators via `data_manager.get_last_closed_bar_index` so it never sees in-progress bars. The backtest's `_compute_30min` previously computed `BB_LOWER` / `BB_UPPER` / EMA at row `k` from `close[k]` (end of the in-progress 30-min window), and the worker mapped intra-window 5-min bars onto that row. Backtest now applies `.shift(1)` to every derived 30-min column so a 5-min bar reads only closed-bar 30-min values -- matching live exactly. Details: [`backtest/README.md`](backtest/README.md) §8.
 - **Reliable `permId` capture at order placement.** `order_engine.py` now wraps every `ib.placeOrder(...)` callsite (TP order, initial stop, BE-stop replacement) with two new helpers: `_wait_for_perm_id(ib, trade, timeout=1.5)` blocks briefly to grab the assigned `permId` synchronously, and `_attach_perm_id_listener(C, leg, key, trade)` hooks `trade.statusEvent` as an asynchronous fallback that mutates `leg["tp_perm_id"]` / `leg["stop_perm_id"]` and re-saves `state/open_legs.json` once IB pushes the value. Fixes the symptom where `state/open_legs.json` would persist `tp_perm_id = 0` / `stop_perm_id = null` (because IB assigns `permId` asynchronously and the bot was reading it synchronously immediately after `placeOrder`), which in turn caused the next session's `state_io.reconcile_with_ib` to fail to re-attach saved legs to live GTC orders.
 - **`entry_cross_mode` knob** mirrored from the backtest. `check_entry_conditions(mode, ..., prev_close, prev_lower_bb)` dispatches on the field. New per-symbol prev-bar snapshot on `Context` (`prev_entry_close`, `prev_entry_lower_bb`) is updated by the entry-evaluation block in `main.py` regardless of pass / fail.
 - **Historical-data tz normalisation** in `data_manager.download_all_timeframes`: every IB historical bar's `date` is converted to `C.market_tz` so it matches the live real-time bars. Prevents the `Can only use .dt accessor with datetimelike values` crash that mixed-tz Series produced.
