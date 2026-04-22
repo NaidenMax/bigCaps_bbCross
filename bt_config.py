@@ -18,6 +18,35 @@ START_DATE = END_DATE - timedelta(days=365)
 WARMUP_DAILY_BARS = 220          # extra daily bars before START_DATE for EMA warmup
 WARMUP_INTRADAY_DAYS = 23        # extra trading days for 30-min indicator warmup
 
+# -------------------------------------------------------------------
+# DOWNLOAD CACHE REFRESH
+# -------------------------------------------------------------------
+# How many recent calendar days to FORCIBLY re-pull from Polygon on
+# every `bt_download.py` run, regardless of what the parquet cache
+# already contains. Protects against the cache-staleness trap: if you
+# run the backtest mid-session, Polygon returns whatever bars exist at
+# that moment (e.g., a partial daily aggregate, only the morning's
+# 5-min bars). Without a refill window, those partial-day rows would
+# never be re-fetched on subsequent runs (forward_from is quantized to
+# last_date + 1, and `_trim_partial_trailing` only drops bars whose
+# end-of-window is still in the future relative to NOW -- by tomorrow
+# they're "complete" by clock time and stay forever).
+#
+# Behavior:
+#   > 0 -> on every run, re-pull the trailing N CALENDAR days for
+#          every timeframe and overwrite the cache (concat order +
+#          drop_duplicates(keep="first") in bt_download.py handles
+#          the overwrite). Cheap insurance: ~10 days of bars per
+#          symbol per run.
+#   = 0 -> pure incremental: only days strictly newer than what's
+#          already cached get fetched. Any partial-day rows already
+#          on disk persist as-is. Use this when you've manually
+#          curated the cache and want zero re-fetching.
+#
+# Default: 10 (covers any reasonable mid-session run-then-rerun gap;
+# also cheaply patches a few days of late Polygon corrections).
+REFILL_RECENT_DAYS = 10
+
 # ===================================================================
 # PATHS
 # ===================================================================
@@ -81,7 +110,7 @@ INDEX_SYMBOL = "SPY"
 #   False -> no ROC filter; every signal that passes other gates fires.
 #   True  -> the gate is active; the SPECIFIC logic depends on
 #            ROC_RANK_MODE below.
-ENABLE_ROC_RANK_FILTER = True
+ENABLE_ROC_RANK_FILTER = False
 
 # Which ranking logic to use when the filter is enabled.
 #   "Simple_Rank"          : (current behavior, default)
@@ -138,6 +167,24 @@ ROC_COMPLEX_REQUIRE_MACD_POS   = True      # daily MACD_HIST > 0
 # STRATEGY — DAILY ATR
 # ===================================================================
 ATR_PERIOD = 7
+
+# ===================================================================
+# STRATEGY — ADX (audit-only, backtest analysis brackets)
+# ===================================================================
+# Wilder's Average Directional Index period. Computed on BOTH the
+# daily and 30-min timeframes, persisted on every signals.csv row
+# and every trades.csv leg, and rendered as two parent-level bracket
+# sections in analysis.html ("PnL by 30m ADX(N) at Entry" and
+# "PnL by Daily ADX(N) at Entry").
+#
+# NO ENTRY FILTER is applied -- ADX is audit-only. Look-ahead safety
+# is enforced by the same patterns used for the existing indicators:
+#   * 30m: .shift(1) inside _compute_30min so a 5-min bar at time t
+#          reads the ADX of the LAST CLOSED 30m bar.
+#   * Daily: the worker's `d_idx = searchsorted(side="left") - 1`
+#          already returns yesterday's daily row, so daily ADX is
+#          taken from the most recent COMPLETED daily bar.
+ADX_PERIOD = 14
 
 # ===================================================================
 # STRATEGY — VOLATILITY REGIME AT ENTRY (audit + bracket analysis)
@@ -241,7 +288,12 @@ ATR_RISK_MULTIPLIER = 2.0        # risk-per-share = multiplier * ATR(period)
 ATR_RISK_PERIOD = 7              # daily ATR lookback for sizing
 MAX_POSITIONS = 100000               # total open sub-positions across all symbols 
 MAX_ENTRIES_PER_SYMBOL_PER_DAY = 10
-ENTRY_COOLDOWN_MINUTES = 5      # min minutes between entries on same symbol
+# Cooldown disabled (= 0) to match the live bot's stacked-parents design
+# (see config.py entry_cooldown_minutes = 0). The live bot now allows
+# multiple parent entries per symbol per day; the only daily-rate
+# limiter is MAX_ENTRIES_PER_SYMBOL_PER_DAY above. Set this > 0 to
+# re-enable a minimum-spacing gate for the backtest only.
+ENTRY_COOLDOWN_MINUTES = 0
 USE_COMPOUNDING = False
 
 # ===================================================================

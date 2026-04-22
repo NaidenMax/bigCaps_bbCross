@@ -185,6 +185,19 @@ def download_symbol(symbol: str, daily_only: bool = False) -> list[dict]:
             else:
                 forward_from = max(requested_from, last_date + timedelta(days=1))
 
+        # cfg.REFILL_RECENT_DAYS: see bt_config for full rationale. When
+        # > 0, force-refresh the trailing N calendar days even if the
+        # cache already has them, so partial-day rows saved by a
+        # mid-session run get overwritten with completed bars on the
+        # next run. The concat order below (`[backfill, forward,
+        # existing]` + `drop_duplicates(keep="first")`) ensures the
+        # freshly-fetched bars win.
+        refill_days = int(getattr(cfg, "REFILL_RECENT_DAYS", 0))
+        if refill_days > 0:
+            refill_from = today_et - timedelta(days=refill_days)
+            if refill_from < forward_from:
+                forward_from = refill_from
+
         if forward_from <= cfg.END_DATE:
             df_fwd, reason = _fetch_bars(symbol, mult, span,
                                          forward_from, cfg.END_DATE)

@@ -48,6 +48,53 @@ def _load(symbol: str, tf: str) -> pd.DataFrame:
 # INDICATOR COMPUTATION
 # ===================================================================
 
+def _wilder_adx(high: pd.Series, low: pd.Series, close: pd.Series,
+                period: int) -> pd.Series:
+    """Classic Wilder ADX(period).
+
+    Returns a Series aligned to the input index. The first ~2*period rows
+    will be NaN (indicator warmup). Pure pandas/numpy; no third-party deps.
+
+    Formula (textbook Wilder 1978):
+        up_move    = high[t] - high[t-1]
+        down_move  = low[t-1] - low[t]
+        +DM = up_move    if up_move    > down_move and up_move    > 0 else 0
+        -DM = down_move  if down_move  > up_move   and down_move  > 0 else 0
+        TR  = max(high-low, |high-prev_close|, |low-prev_close|)
+        +DI = 100 * Wilder_EMA(+DM) / Wilder_EMA(TR)
+        -DI = 100 * Wilder_EMA(-DM) / Wilder_EMA(TR)
+        DX  = 100 * |+DI - -DI| / (+DI + -DI)
+        ADX = Wilder_EMA(DX, period)
+
+    "Wilder_EMA" here uses pandas' ewm(alpha=1/period, adjust=False), which
+    is identical to the recursive Wilder smoother once warmed up.
+    """
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm  = np.where((up_move   > down_move) & (up_move   > 0), up_move,   0.0)
+    minus_dm = np.where((down_move > up_move)   & (down_move > 0), down_move, 0.0)
+    plus_dm  = pd.Series(plus_dm,  index=high.index)
+    minus_dm = pd.Series(minus_dm, index=high.index)
+
+    prev_close = close.shift()
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low  - prev_close).abs(),
+    ], axis=1).max(axis=1)
+
+    alpha = 1.0 / period
+    atr_w     = tr.ewm(alpha=alpha, adjust=False).mean()
+    plus_di_w  = 100.0 * plus_dm.ewm(alpha=alpha, adjust=False).mean()  / atr_w
+    minus_di_w = 100.0 * minus_dm.ewm(alpha=alpha, adjust=False).mean() / atr_w
+
+    di_sum = plus_di_w + minus_di_w
+    with np.errstate(invalid="ignore", divide="ignore"):
+        dx = 100.0 * (plus_di_w - minus_di_w).abs() / di_sum.where(di_sum != 0)
+    adx = dx.ewm(alpha=alpha, adjust=False).mean()
+    return adx
+
+
 def _compute_daily(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -83,6 +130,11 @@ def _compute_daily(df: pd.DataFrame) -> pd.DataFrame:
     df["MACD_HIST"] = df["MACD"] - df["MACD_SIGNAL"]
     # ROC (daily, %)
     df[f"ROC_{cfg.ROC_PERIOD}"] = (df["close"] / df["close"].shift(cfg.ROC_PERIOD) - 1) * 100
+    # ADX (daily; audit-only, no entry filter applied). No .shift(1) here:
+    # the worker reads daily values via `searchsorted(side="left") - 1`,
+    # which already returns the most recent COMPLETED daily bar.
+    df[f"ADX_{cfg.ADX_PERIOD}"] = _wilder_adx(df["high"], df["low"], df["close"],
+                                              cfg.ADX_PERIOD)
     # Complex_Rank extras -- only when that mode is active. Cheap, but
     # kept conditional so Simple_Rank backtests stay byte-identical.
     if getattr(cfg, "ROC_RANK_MODE", "Simple_Rank") == "TC2000_Complex_Rank":
@@ -121,6 +173,11 @@ def _compute_30min(df: pd.DataFrame) -> pd.DataFrame:
                 * int(getattr(cfg, "BB_WIDTH_BARS_PER_DAY", 13)))
     df["BB_WIDTH_PCT_AVG"] = df["BB_WIDTH_PCT"].rolling(_n, min_periods=1).mean()
     df["BB_SQUEEZE_RATIO"] = df["BB_WIDTH_PCT"] / df["BB_WIDTH_PCT_AVG"]
+    # ADX (30-min; audit-only, no entry filter applied). Same .shift(1)
+    # discipline as the other 30m columns above so a 5-min bar at time t
+    # reads ADX as of the LAST CLOSED 30m bar (no look-ahead).
+    df[f"ADX_{cfg.ADX_PERIOD}"] = _wilder_adx(df["high"], df["low"], df["close"],
+                                              cfg.ADX_PERIOD).shift(1)
     return df
 
 # ===================================================================
@@ -499,6 +556,7 @@ def _simulate_one_symbol(args):
             macd_hist = float("nan")
             roc_val = float("nan")
             roc_cut = float("nan")
+            adx14_daily = float("nan")
         else:
             drow = daily.iloc[d_idx]
             ema_fast = float(drow.get(f"EMA_{cfg.UPTREND_FAST_EMA}", float("nan")))
@@ -508,6 +566,7 @@ def _simulate_one_symbol(args):
             atr_risk_val = float(drow.get(atr_risk_col, float("nan")))
             macd_hist = float(drow.get("MACD_HIST", float("nan")))
             roc_val = float(drow.get(roc_col, float("nan")))
+            adx14_daily = float(drow.get(f"ADX_{cfg.ADX_PERIOD}", float("nan")))
             roc_cut = float(roc_cutoff_by_day.get(daily_dates[d_idx], float("nan"))) \
                 if cfg.ENABLE_ROC_RANK_FILTER else float("nan")
 
@@ -566,6 +625,7 @@ def _simulate_one_symbol(args):
         m30_bb_width_pct_full = m30["BB_WIDTH_PCT"].values
         m30_bb_width_avg_full = m30["BB_WIDTH_PCT_AVG"].values
         m30_bb_squeeze_full   = m30["BB_SQUEEZE_RATIO"].values
+        m30_adx_full          = m30[f"ADX_{cfg.ADX_PERIOD}"].values
         valid30 = idx_30m_arr >= 0
         safe_idx30 = np.where(valid30, idx_30m_arr, 0)
         lower_bb_arr = np.where(valid30, m30_bb_lower_full[safe_idx30], np.nan)
@@ -574,6 +634,7 @@ def _simulate_one_symbol(args):
         bb_width_pct_arr = np.where(valid30, m30_bb_width_pct_full[safe_idx30], np.nan)
         bb_width_avg_arr = np.where(valid30, m30_bb_width_avg_full[safe_idx30], np.nan)
         bb_squeeze_arr   = np.where(valid30, m30_bb_squeeze_full[safe_idx30], np.nan)
+        adx14_30m_arr    = np.where(valid30, m30_adx_full[safe_idx30], np.nan)
         # Per-day daily ATR % (broadcast scalar; bars share the same daily close).
         _daily_close_today = float(drow["close"]) if drow is not None else float("nan")
         if (not math.isnan(atr_risk_val) and not math.isnan(_daily_close_today)
@@ -645,6 +706,7 @@ def _simulate_one_symbol(args):
             lower_bb = float(lower_bb_arr[i])
             ema100_30 = float(ema100_30_arr[i])
             ema200_30 = float(ema200_30_arr[i])
+            adx14_30m = float(adx14_30m_arr[i])
             had_30m_bullish_cross = bool(had_cross_30m_arr[i])
 
             # --- (A0) MAE / MFE on every still-open position ---
@@ -792,6 +854,8 @@ def _simulate_one_symbol(args):
                     "bb_squeeze_ratio_30m": round(_sq, 3)   if not math.isnan(_sq)   else "",
                     "daily_atr_pct":        round(_atrp, 3) if not math.isnan(_atrp) else "",
                     "bb_vs_atr_ratio":      round(_bba, 3)  if not math.isnan(_bba)  else "",
+                    "adx14_30m":   round(adx14_30m, 2)   if not math.isnan(adx14_30m)   else "",
+                    "adx14_daily": round(adx14_daily, 2) if not math.isnan(adx14_daily) else "",
                     "traded": skip == "",
                     "skip_reason": skip,
                 })
@@ -916,6 +980,10 @@ def _simulate_one_symbol(args):
                 "bb_width_pct_30m_avg": round(float(bb_width_avg_arr[i]), 3) if not math.isnan(float(bb_width_avg_arr[i])) else float("nan"),
                 "bb_squeeze_ratio_30m": round(float(bb_squeeze_arr[i]), 3)   if not math.isnan(float(bb_squeeze_arr[i]))   else float("nan"),
                 "bb_vs_atr_ratio":      round(float(bb_vs_atr_arr[i]), 3)    if not math.isnan(float(bb_vs_atr_arr[i]))    else float("nan"),
+                # ADX(14) at entry on the LAST CLOSED bar of each timeframe
+                # (no look-ahead). Audit-only -- not used for filtering.
+                "adx14_30m":   round(adx14_30m, 2)   if not math.isnan(adx14_30m)   else float("nan"),
+                "adx14_daily": round(adx14_daily, 2) if not math.isnan(adx14_daily) else float("nan"),
                 "day_of_week": bar_time.day_name() if hasattr(bar_time, "day_name") else "",
                 "entry_hhmm": bar_time.strftime("%H:%M") if hasattr(bar_time, "strftime") else "",
                 "swing_low_at_entry": round(swing_low, 2) if not math.isnan(swing_low) else 0.0,

@@ -497,6 +497,10 @@ def _aggregate_to_parents(trades: pd.DataFrame) -> pd.DataFrame:
         "bb_squeeze_ratio_30m": ("bb_squeeze_ratio_30m", "first"),
         "daily_atr_pct":        ("daily_atr_pct", "first"),
         "bb_vs_atr_ratio":      ("bb_vs_atr_ratio", "first"),
+        # ADX(14) at entry on the LAST CLOSED bar of each timeframe
+        # (no look-ahead). Audit-only -- bracketed below in 1e / 1f.
+        "adx14_30m":            ("adx14_30m", "first"),
+        "adx14_daily":          ("adx14_daily", "first"),
     }
     available = {k: v for k, v in first_cols.items() if v[0] in trades.columns}
     parents = g.agg(
@@ -1092,6 +1096,82 @@ def _build_analysis_report(trades: pd.DataFrame, daily: pd.DataFrame) -> str:
             '<section><div class="section-title">'
             'PnL by 30m BB Width vs Daily ATR at Entry (parent-level)</div>'
             '<p class="muted">No <code>bb_vs_atr_ratio</code> in '
+            'trades.csv yet &mdash; re-run the backtest to populate it.'
+            '</p></section>'
+        )
+
+    # --- 1e. PnL by 30m ADX(14) at Entry ------------------------------
+    # Trend-strength test on the entry timeframe. ADX is read from the
+    # LAST CLOSED 30-min bar (no look-ahead). Audit-only -- not used as
+    # an entry filter. Buckets follow conventional Wilder ADX
+    # interpretation.
+    adx_edges  = [-np.inf, 15, 20, 25, 40, np.inf]
+    adx_labels = [
+        "No trend (<15)",
+        "Forming (15-20)",
+        "Mild trend (20-25)",
+        "Strong trend (25-40)",
+        "Very strong (>=40)",
+    ]
+    if (not parents.empty
+            and "adx14_30m" in parents.columns
+            and parents["adx14_30m"].notna().any()):
+        parents["_adx30_bkt"] = _bucket_with_bins(
+            parents["adx14_30m"], adx_edges, adx_labels)
+        order = adx_labels + ["(no data)"]
+        tbl = _slice_table_parent(parents, "_adx30_bkt",
+                                  "30m ADX(14)", order=order)
+        sections.append(
+            '<section><div class="section-title">'
+            'PnL by 30m ADX(14) at Entry (parent-level)</div>'
+            '<p class="caption">'
+            "Wilder's Average Directional Index on the 30-min timeframe, "
+            'measured at the LAST CLOSED 30-min bar at entry (no look-ahead). '
+            'Higher ADX = stronger directional trend regardless of direction. '
+            'Tests whether entries fired during a strong vs. weak 30-min '
+            'trend regime perform differently. Audit-only &mdash; ADX is '
+            'not used as a filter.</p>'
+            f'{tbl}</section>'
+        )
+    else:
+        sections.append(
+            '<section><div class="section-title">'
+            'PnL by 30m ADX(14) at Entry (parent-level)</div>'
+            '<p class="muted">No <code>adx14_30m</code> in '
+            'trades.csv yet &mdash; re-run the backtest to populate it.'
+            '</p></section>'
+        )
+
+    # --- 1f. PnL by Daily ADX(14) at Entry ----------------------------
+    # Trend-strength test on the daily timeframe. ADX is read from the
+    # most recent COMPLETED daily bar (the worker's
+    # `searchsorted(side="left") - 1` already enforces this). Same
+    # bucket edges as 1e for direct comparison. Audit-only.
+    if (not parents.empty
+            and "adx14_daily" in parents.columns
+            and parents["adx14_daily"].notna().any()):
+        parents["_adxd_bkt"] = _bucket_with_bins(
+            parents["adx14_daily"], adx_edges, adx_labels)
+        order = adx_labels + ["(no data)"]
+        tbl = _slice_table_parent(parents, "_adxd_bkt",
+                                  "Daily ADX(14)", order=order)
+        sections.append(
+            '<section><div class="section-title">'
+            'PnL by Daily ADX(14) at Entry (parent-level)</div>'
+            '<p class="caption">'
+            "Wilder's Average Directional Index on the daily timeframe, "
+            'measured at the most recent COMPLETED daily bar at entry '
+            '(no look-ahead). Same bucket edges as the 30-min ADX section '
+            'for direct comparison. Tests whether entries during strong '
+            'daily trends perform differently from entries during weak '
+            'daily regimes. Audit-only &mdash; ADX is not used as a filter.</p>'
+            f'{tbl}</section>'
+        )
+    else:
+        sections.append(
+            '<section><div class="section-title">'
+            'PnL by Daily ADX(14) at Entry (parent-level)</div>'
+            '<p class="muted">No <code>adx14_daily</code> in '
             'trades.csv yet &mdash; re-run the backtest to populate it.'
             '</p></section>'
         )
