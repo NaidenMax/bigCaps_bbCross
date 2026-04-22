@@ -1,0 +1,151 @@
+Edit Column
+
+X
+
+Header
+
+12|6|3_TOP5pct_1stUptic
+
+Conditions
+
+Display
+
+Timeframe:
+
+Mixed
+
+Filter
+
+D
+
+Volume 90-Day Is True - Daily
+
+and C > 3 and ATR(10)/C > 0.03 and ATR(25)/C > 0.03 Is True - Daily
+
+and ◄ (
+
+Rate of Change 5 Ranks between 94.59 and Max - Daily
+
+or Rate of Change 10 Ranks between 94.59 and Max - Daily
+
+or Rate of Change 30 Ranks between 94.59 and Max - Daily
+
++)
+
+and MACD Histogram 12 26 9 > 0 - Daily
+
+and Capitalization > 2000
+
++
+
+Save
+
+OK
+
+Copy to...
+
+Cancel
+
+Name Volume 90-Day
+
+AVGV10 > 300000
+
+Calculation Speed= Fast
+
+MSFT
+
+Test
+
+Formula value
+
+Is true
+
+True
+
+Now
+
+TimeFrame
+
+Daily
+
+Edit Column
+
+X
+
+Header
+
+12|6|3_TOP5pct_1stUptic
+
+Conditions
+
+Display
+
+Timeframe:
+
+Mixed
+
+Filter
+
+Volume 90-Day Is True - Daily
+
+and C > 3 and ATR(10)/C > 0.03 and ATR(25)/C > 0.03 Is True - Daily
+
+and (
+
+Rate of Change 5 Ranks between 94.59 and Max - Daily
+
+or Rate of Change 10 Ranks between 94.59 and Max - Daily
+
+or Rate of Change 30 Ranks between 94.59 and Max - Daily
+
++)
+
+and MACD Histogram 12 26 9 > 0 - Daily
+
+and Capitalization > 2000
+
++
+
+Indicators
+
+Rate of Change 5 +
+
+Indicator
+
+Rate of Change 5
+
+▼
+
+Condition
+
+Ranks
+
+-95%
+
+50%
+
+1%
+
+Rank Against
+
+US Stocks
+
+True
+
+within last x bars
+
+Within Bars
+
+20
+
+Save
+
+OK
+
+Copy to...
+
+Cancel
+
+TimeFrame
+
+Daily
