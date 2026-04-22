@@ -484,7 +484,13 @@ def _simulate_one_symbol(args):
         day_net = 0.0
 
         # --- daily uptrend filter (gates NEW entries only) ---
-        d_idx = int(np.searchsorted(daily_dates, day, side="right")) - 1
+        # NO-LOOK-AHEAD: searchsorted(side="left") - 1 returns the latest
+        # daily row with date STRICTLY LESS than today = the most recent
+        # COMPLETED daily bar. side="right" would return today's row, whose
+        # close / EMAs / ATR / MACD / ROC incorporate the full session and
+        # are not known at intraday signal time. Mirrors the live bot,
+        # which physically cannot see today's daily bar at intraday time.
+        d_idx = int(np.searchsorted(daily_dates, day, side="left")) - 1
         if d_idx < 0:
             drow = None
             uptrend_ok = False
@@ -505,17 +511,34 @@ def _simulate_one_symbol(args):
             roc_cut = float(roc_cutoff_by_day.get(daily_dates[d_idx], float("nan"))) \
                 if cfg.ENABLE_ROC_RANK_FILTER else float("nan")
 
-        index_macd_hist = float(index_macd_by_day.get(day, float("nan"))) \
-            if cfg.ENABLE_INDEX_MACD_FILTER else float("nan")
+        # Most recent completed daily date for this symbol; used as the
+        # lookup key for cross-symbol per-day dicts (index_macd_by_day,
+        # screen_pass_by_day) so they also return yesterday's value
+        # rather than today's.
+        _prev_daily_date = daily_dates[d_idx] if d_idx >= 0 else None
 
-        # Per-day Complex_Rank screen result (True everywhere else, so
-        # Simple_Rank short-circuits past the new gate).
-        day_screen_pass = (screen_pass_by_day.get(day, False)
-                           if (cfg.ENABLE_ROC_RANK_FILTER
-                               and getattr(cfg, "ROC_RANK_MODE",
-                                           "Simple_Rank")
-                                   == "TC2000_Complex_Rank")
-                           else True)
+        index_macd_hist = float(index_macd_by_day.get(_prev_daily_date,
+                                                      float("nan"))) \
+            if (cfg.ENABLE_INDEX_MACD_FILTER and _prev_daily_date is not None) \
+            else float("nan")
+
+        # Per-day Complex_Rank screen result. When the Complex_Rank gate
+        # is OFF (Simple_Rank or rank disabled), short-circuit to True so
+        # the gate is a no-op. When ON, look up by the most-recent-
+        # completed daily date so the screen reflects what was known at
+        # the close of yesterday's session, not today's. If no prior
+        # daily date exists, fail-safe to False (do not enter).
+        _complex_rank_active = (cfg.ENABLE_ROC_RANK_FILTER
+                                and getattr(cfg, "ROC_RANK_MODE",
+                                            "Simple_Rank")
+                                    == "TC2000_Complex_Rank")
+        if not _complex_rank_active:
+            day_screen_pass = True
+        elif _prev_daily_date is None:
+            day_screen_pass = False
+        else:
+            day_screen_pass = bool(screen_pass_by_day.get(_prev_daily_date,
+                                                          False))
 
         # --- Slice today's 5-min bars via searchsorted ---
         i0 = int(np.searchsorted(m5_dates, day, side="left"))
@@ -823,9 +846,17 @@ def _simulate_one_symbol(args):
                 continue
             stop_price = session_low - cfg.STOP_OFFSET if cfg.ENABLE_STOP else 0.0
 
-            swing_high = _swing_high(m30, idx_30m, cfg.TARGET_LOOKBACK) \
+            # NO-LOOK-AHEAD: idx_30m is the START index of the in-progress
+            # 30m bar (mapped via searchsorted side="left" - 1 in the worker
+            # loop), whose high/low are NOT yet finalized at intraday signal
+            # time. Use idx_30m - 1 = the most recent CLOSED 30m bar so the
+            # swing target window only consults bars that the live bot also
+            # sees. _swing_high / _swing_low already return NaN when end_idx
+            # is negative, so cold-start days are handled.
+            _swing_end_idx = idx_30m - 1
+            swing_high = _swing_high(m30, _swing_end_idx, cfg.TARGET_LOOKBACK) \
                 if cfg.ENABLE_TARGET else float("nan")
-            swing_low = _swing_low(m30, idx_30m, cfg.TARGET_LOOKBACK) \
+            swing_low = _swing_low(m30, _swing_end_idx, cfg.TARGET_LOOKBACK) \
                 if cfg.ENABLE_TARGET else float("nan")
             fib_target = float("nan")
             if (not math.isnan(swing_high) and not math.isnan(swing_low)

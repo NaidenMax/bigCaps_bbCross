@@ -157,8 +157,8 @@ BB_WIDTH_BARS_PER_DAY      = 13
 # STRATEGY — ENTRY
 # ===================================================================
 ENTRY_TF = "5min"
-ENTRY_TIME_AFTER = "09:30"       # HH:MM — reject entries at/before this clock time
-ENTRY_TIME_BEFORE = "13:30"       # HH:MM — reject entries after this clock time
+ENTRY_TIME_AFTER = "10:00"       # HH:MM — reject entries at/before this clock time
+ENTRY_TIME_BEFORE = "14:00"       # HH:MM — reject entries after this clock time
 
 # Entry cross detection mode:
 #   "same_bar"   -> strict: 5m bar OPENS below 30m lower BB AND CLOSES above

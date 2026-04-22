@@ -67,6 +67,47 @@ def main():
         print(f"ERROR: no 5-min bars for {SYMBOL} on {TARGET_DAY}")
         return
 
+    # ---- 2b. Daily look-ahead audit (post-fix). Show both yesterday's
+    #          and today's daily rows for the columns that actually feed
+    #          the entry filter; post-fix the engine should consume the
+    #          YESTERDAY row at intraday signal time on TARGET_DAY.
+    daily_dates = daily["date"].dt.date.values
+    d_idx_postfix = int(np.searchsorted(daily_dates, TARGET_DAY,
+                                        side="left")) - 1
+    d_idx_today = int(np.searchsorted(daily_dates, TARGET_DAY,
+                                      side="right")) - 1
+    fast_d = f"EMA_{cfg.UPTREND_FAST_EMA}"
+    slow_d = f"EMA_{cfg.UPTREND_SLOW_EMA}"
+    cols = ["date", "close", fast_d, slow_d, "MACD_HIST"]
+    cols += [c_ for c_ in daily.columns
+             if (c_.startswith("ATR_") or c_.startswith("ROC_"))
+             and c_ in daily.columns and c_ not in cols]
+    print(f"\n--- daily-row audit for {SYMBOL} on {TARGET_DAY} ---")
+    print(f"  d_idx_postfix (side='left'-1)  = {d_idx_postfix}  "
+          f"-> date={daily_dates[d_idx_postfix] if d_idx_postfix >= 0 else None}")
+    print(f"  d_idx_buggy   (side='right'-1) = {d_idx_today}  "
+          f"-> date={daily_dates[d_idx_today]   if d_idx_today   >= 0 else None}")
+    avail = [c_ for c_ in cols if c_ in daily.columns]
+    if d_idx_postfix >= 0:
+        print(f"\n  YESTERDAY row used post-fix (intraday signals on {TARGET_DAY}):")
+        print(daily.iloc[[d_idx_postfix]][avail].to_string(index=False))
+    if d_idx_today >= 0 and d_idx_today != d_idx_postfix:
+        print(f"\n  TODAY row that the BUGGY engine would have used:")
+        print(daily.iloc[[d_idx_today]][avail].to_string(index=False))
+        if d_idx_postfix >= 0:
+            yrow = daily.iloc[d_idx_postfix]
+            trow = daily.iloc[d_idx_today]
+            print("\n  delta(today - yesterday) for filter inputs:")
+            for cc in avail:
+                if cc == "date":
+                    continue
+                try:
+                    yv = float(yrow[cc]); tv = float(trow[cc])
+                    print(f"    {cc:>20s}: yesterday={yv:.4f}  today={tv:.4f}  "
+                          f"delta={tv - yv:+.4f}")
+                except Exception:
+                    pass
+
     m30_time_ns = m30["date"].values.astype("datetime64[ns]")
     bar_times_ns = m5_day["date"].values.astype("datetime64[ns]")
     idx_30m_arr = np.searchsorted(m30_time_ns, bar_times_ns, side="left") - 1
@@ -177,6 +218,28 @@ def main():
         ]]
         print("\n--- cross bars ---")
         print(sub.to_string(index=False))
+
+        # Swing high/low look-ahead audit (post-fix uses idx_30m - 1).
+        from bt_backtest import _swing_high, _swing_low  # noqa: E402
+        print("\n--- swing high/low audit at each cross (TARGET_LOOKBACK="
+              f"{cfg.TARGET_LOOKBACK} 30m bars) ---")
+        for i in range(n):
+            if not bool(cross[i]):
+                continue
+            idx = int(idx_30m_arr[i])
+            sh_buggy   = _swing_high(m30, idx,     cfg.TARGET_LOOKBACK)
+            sl_buggy   = _swing_low(m30,  idx,     cfg.TARGET_LOOKBACK)
+            sh_postfix = _swing_high(m30, idx - 1, cfg.TARGET_LOOKBACK)
+            sl_postfix = _swing_low(m30,  idx - 1, cfg.TARGET_LOOKBACK)
+            print(f"  {_fmt_ts(t[i])}  idx_30m={idx}")
+            print(f"    BUGGY   (end_idx={idx}):   "
+                  f"swing_high={sh_buggy:.4f}  swing_low={sl_buggy:.4f}")
+            print(f"    POSTFIX (end_idx={idx - 1}): "
+                  f"swing_high={sh_postfix:.4f}  swing_low={sl_postfix:.4f}")
+            d_sh = sh_postfix - sh_buggy
+            d_sl = sl_postfix - sl_buggy
+            print(f"    delta(postfix - buggy):    "
+                  f"swing_high={d_sh:+.4f}  swing_low={d_sl:+.4f}")
 
     # ---- 4. Run the engine for AAPL only and print this day's trade(s) ----
     print("\n--- building cross-symbol inputs (Simple/Complex cutoffs, index MACD) ---")

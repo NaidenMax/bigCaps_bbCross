@@ -21,7 +21,7 @@ import sys
 #                 Use this when iterating on config: refreshes everything
 #                 you need to see, never re-downloads.
 #   "full"      - download -> backtest -> report -> charts -> portfolio
-MODE = "rerun"
+MODE = "full"
 
 
 def _dispatch():
